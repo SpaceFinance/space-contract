@@ -58,15 +58,11 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
         timeSettle  = timeSettle_;
         minNumber = minNumber_;
         maxNumber =  maxNumber_;
-        require(timeSettle_ >= time_, 'timeSettle_ should >= time_');
-    }
-
-    function savecompleted() public onlyOwner {
-        completed = true;
+        require(timeSettle_ >= time_, "timeSettle_ should >= time_");
     }
 
     function purchase(uint amount) external {
-        require(block.timestamp < time, 'expired');
+        require(block.timestamp < time, "expired");
         require(amount >= minNumber && maxNumber >= amount, "amount error");
         require(maxNumber-purchasedCurrencyOf[_msgSender()] >= amount, "Maximum number exceeded");
         currency.safeTransferFrom(_msgSender(), address(this), amount);
@@ -76,8 +72,8 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
     }
 
     function purchaseBNB() public payable {
-        require(address(currency) == address(0), 'should call purchase(uint amount) instead');
-        require(block.timestamp < time, 'expired');
+        require(address(currency) == address(0), "should call purchase(uint amount) instead");
+        require(block.timestamp < time, "expired");
         uint amount = msg.value;
         require(amount >= minNumber && maxNumber >= amount, "amount error");
         purchasedCurrencyOf[_msgSender()] = purchasedCurrencyOf[_msgSender()].add(amount);
@@ -109,7 +105,8 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
 
     function settle() public {
         require(block.timestamp >= time, "It is not time yet");
-        require(settledUnderlyingOf[_msgSender()] == 0 || settledCurrencyOf[_msgSender()] == 0 , 'settled already');
+        require(settledUnderlyingOf[_msgSender()] == 0 || settledCurrencyOf[_msgSender()] == 0 , "settled already");
+        require(isContract(_msgSender()) == false, "address is Contract");
         (bool completed_, uint amount, uint volume, uint rate) = settleable(_msgSender());
         if(!completed_) {
             completed = true;
@@ -117,11 +114,12 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
         }
         settledCurrencyOf[_msgSender()] = settledCurrencyOf[_msgSender()].add(amount);
         totalSettledCurrency = totalSettledCurrency.add(amount);
-        if(address(currency) == address(0))
-            payable(_msgSender()).transfer(amount);
-        else
+        if(address(currency) == address(0)){
+            (bool success, ) = _msgSender().call{value:amount}("");
+            require(success, "Transfer failed.");
+        }else
             currency.safeTransfer(_msgSender(), amount);
-            require(amount > 0 || block.timestamp >= timeSettle, 'It is not time to settle underlying');
+            require(amount > 0 || block.timestamp >= timeSettle, "It is not time to settle underlying");
         if(block.timestamp >= timeSettle) {
             settledUnderlyingOf[_msgSender()] = settledUnderlyingOf[_msgSender()].add(volume);
             totalSettledUnderlying = totalSettledUnderlying.add(volume);
@@ -133,27 +131,23 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
     function withdrawable() public view returns (uint amt, uint vol) {
         if(!completed)
             return (0, 0);
-        //amt = currency == address(0) ? address(this).balance : IERC20(currency).balanceOf(address(this));
-        //amt = amt.add(totalSettledUnderlying.mul(price).div(settleRate).mul(uint(1e18).sub(settleRate)).div(1e18)).sub(totalPurchasedCurrency.mul(uint(1e18).sub(settleRate)).div(1e18));
         amt = totalPurchasedCurrency.mul(settleRate).div(1e18);
         vol = underlying.balanceOf(address(this)).add(totalSettledUnderlying).sub(totalPurchasedCurrency.mul(settleRate).div(price));
     }
 
     function withdraw(address payable to, uint amount, uint volume) external onlyOwner {
         require(completed, "uncompleted");
+        require(isContract(to) == false, "address is Contract");
+        require(to != address(0), "to address can not be address 0");
         (uint amt, uint vol) = withdrawable();
         amount = MathUpgradeable.min(amount, amt);
         volume = MathUpgradeable.min(volume, vol);
-        if(address(currency) == address(0))
-            to.transfer(amount);
-        else
+        if(address(currency) == address(0)){
+            (bool success, ) = to.call{value:amount}("");
+            require(success, "Transfer failed.");
+        }else{
             currency.safeTransfer(to, amount);
-        underlying.safeTransfer(to, volume);
-        emit Withdrawn(to, amount, volume);
-    }
-
-    function allWithdraw(address payable to, uint amount, uint volume) external onlyOwner {
-        currency.safeTransfer(to, amount);
+        }
         underlying.safeTransfer(to, volume);
         emit Withdrawn(to, amount, volume);
     }
@@ -162,19 +156,31 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
     ///  sent tokens to this contract.
     /// @param _token The address of the token contract that you want to recover
     function rescueTokens(address _token, address _dst) public onlyOwner {
-        require(address(_token) != address(currency) && address(_token) != address(underlying));
+        require(address(_token) != address(currency) && address(_token) != address(underlying), "token error");
+        require(_dst != address(0), "dst address can not be address 0");
         uint balance = IERC20Upgradeable(_token).balanceOf(address(this));
         IERC20Upgradeable(_token).safeTransfer(_dst, balance);
     }
 
     function withdrawBNB(address payable _dst) external onlyOwner {
-        require(address(currency) != address(0));
-        _dst.transfer(address(this).balance);
+        require(address(currency) != address(0), "currency address can not be address 0");
+        require(_dst != address(0), "dst address can not be address 0");
+        require(isContract(_dst) == false, "address is Contract");
+        (bool success, ) = _dst.call{value:address(this).balance}("");
+        require(success, "Transfer failed.");
     }
 
     function withdrawBNB() external onlyOwner {
-        require(address(currency) != address(0));
-        payable(_msgSender()).transfer(address(this).balance);
+        require(address(currency) != address(0), "currency address can not be address 0");
+        require(isContract(_msgSender()) == false, "address is Contract");
+        (bool success, ) = _msgSender().call{value:address(this).balance}("");
+        require(success, "Transfer failed.");
+    }
+
+    function isContract(address addr) internal view returns (bool) {
+        uint size;
+        assembly { size := extcodesize(addr) }
+        return size > 0;
     }
 
     receive() external payable{
@@ -238,10 +244,6 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
         maxNumber = maxNumber_;
     }
 
-    function savecompleted() public onlyOwner {
-        timeSettle = block.timestamp;
-    }
-
     function setQuota(address addr, uint amount) public onlyOwner {
         totalQuota = totalQuota.add(amount).sub(quotaOf[addr]);
         quotaOf[addr] = amount;
@@ -259,40 +261,44 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
     }
 
     function purchase(uint amount) external {
-        require(address(currency) != address(0), 'should call purchaseBNB() instead');
+        require(address(currency) != address(0), "should call purchaseBNB() instead");
         require(block.timestamp >= time, "it's not time yet");
         require(block.timestamp < timeSettle, "expired");
         require(amount >= minNumber && maxNumber >= amount, "amount error");
         amount = MathUpgradeable.min(amount, quotaOf[_msgSender()]);
-        require(amount > 0, 'no quota');
-        require(currency.allowance(_msgSender(), address(this)) >= amount, 'allowance not enough');
-        require(currency.balanceOf(_msgSender()) >= amount, 'balance not enough');
-        require(purchasedUnderlyingOf[_msgSender()] == 0, 'purchased already');
+        require(amount > 0, "no quota");
+        require(currency.allowance(_msgSender(), address(this)) >= amount, "allowance not enough");
+        require(currency.balanceOf(_msgSender()) >= amount, "balance not enough");
+        require(purchasedUnderlyingOf[_msgSender()] == 0, "purchased already");
 
         currency.safeTransferFrom(_msgSender(), recipient, amount);
         uint volume = amount.mul(ratio).div(1e18);
         purchasedUnderlyingOf[_msgSender()] = volume;
         totalPurchasedUnderlying = totalPurchasedUnderlying.add(volume);
-        require(totalPurchasedUnderlying <= underlying.balanceOf(address(this)), 'Quota is full');
+        require(totalPurchasedUnderlying <= underlying.balanceOf(address(this)), "Quota is full");
         emit Purchase(_msgSender(), amount, volume, totalPurchasedUnderlying);
     }
 
     function purchaseBNB() public payable {
-        require(address(currency) == address(0), 'should call purchase(uint amount) instead');
+        require(address(currency) == address(0), "should call purchase(uint amount) instead");
         require(block.timestamp >= time, "it's not time yet");
         require(block.timestamp < timeSettle, "expired");
         uint amount = MathUpgradeable.min(msg.value, quotaOf[_msgSender()]);
         require(amount >= minNumber && maxNumber >= amount, "amount error");
-        require(amount > 0, 'no quota');
-        require(purchasedUnderlyingOf[_msgSender()] == 0, 'purchased already');
+        require(amount > 0, "no quota");
+        require(purchasedUnderlyingOf[_msgSender()] == 0, "purchased already");
+        require(isContract(_msgSender()) == false, "msgSender is Contract");
 
-        recipient.transfer(amount);
+        (bool recipientSuccess, ) = recipient.call{value:amount}("");
+        require(recipientSuccess, "Transfer failed.");
         uint volume = amount.mul(ratio).div(1e18);
         purchasedUnderlyingOf[_msgSender()] = volume;
         totalPurchasedUnderlying = totalPurchasedUnderlying.add(volume);
-        require(totalPurchasedUnderlying <= underlying.balanceOf(address(this)), 'Quota is full');
-        if(msg.value > amount)
-        payable(_msgSender()).transfer(msg.value.sub(amount));
+        require(totalPurchasedUnderlying <= underlying.balanceOf(address(this)), "Quota is full");
+        if(msg.value > amount){
+            (bool success, ) = _msgSender().call{value:amount}("");
+            require(success, "Transfer failed.");
+        }
         emit Purchase(_msgSender(), amount, volume, totalPurchasedUnderlying);
     }
 
@@ -312,12 +318,8 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
     ///  sent tokens to this contract.
     /// @param _token The address of the token contract that you want to recover
     function rescueTokens(address _token, address _dst) public onlyOwner {
-        require(block.timestamp > timeSettle);
-        uint balance = IERC20Upgradeable(_token).balanceOf(address(this));
-        IERC20Upgradeable(_token).safeTransfer(_dst, balance);
-    }
-
-    function allWithdraw(address _token, address _dst) external onlyOwner {
+        require(block.timestamp > timeSettle, "It is not time yet");
+        require(_dst != address(0), "dst address can not be address 0");
         uint balance = IERC20Upgradeable(_token).balanceOf(address(this));
         IERC20Upgradeable(_token).safeTransfer(_dst, balance);
     }
@@ -331,13 +333,24 @@ contract Starter is Initializable, ContextUpgradeable, OwnableUpgradeable {
     }
 
     function withdrawBNB(address payable _dst) external onlyOwner {
-        require(address(currency) != address(0));
-        _dst.transfer(address(this).balance);
+        require(address(currency) != address(0), "currency address can not be address 0");
+        require(_dst != address(0), "dst address can not be address 0");
+        require(isContract(_dst) == true, "address is Contract");
+        (bool success, ) = _dst.call{value:address(this).balance}("");
+        require(success, "Transfer failed.");
     }
 
     function withdrawBNB() external onlyOwner {
-        require(address(currency) != address(0));
-        payable(_msgSender()).transfer(address(this).balance);
+        require(address(currency) != address(0), "currency address can not be address 0");
+        require(isContract(_msgSender()) == true, "address is Contract");
+        (bool success, ) = _msgSender().call{value:address(this).balance}("");
+        require(success, "Transfer failed.");
+    }
+
+    function isContract(address addr) internal view returns (bool) {
+        uint size;
+        assembly { size := extcodesize(addr) }
+        return size > 0;
     }
 
     receive() external payable{
